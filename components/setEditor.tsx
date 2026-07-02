@@ -8,7 +8,9 @@ import {
   Input,
 } from "@chakra-ui/react";
 import { MdAdd, MdDelete, MdClose } from "react-icons/md";
-import { useRef } from "react";
+import { useState } from "react";
+import ServerSelectModal from "@/components/ServerSelectModal";
+import type { MockPlayerStat } from "@/utils/mockData";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +25,7 @@ interface GameRow {
   team1_points: string | null;
   team2_points: string | null;
   is_golden_point: boolean;
+  server_name?: string | null;
 }
 
 interface TiebreakRow {
@@ -40,15 +43,16 @@ export interface SetRow {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const SCORE_BTNS = ["0", "15", "30", "40"] as const;
+const SCORE_BTNS = ["0", "15", "30", "40", "A"] as const;
 
-function emptyGame(num: number): GameRow {
+function emptyGame(num: number, serverName: string | null = null): GameRow {
   return {
     game_number: num,
     winner_team_id: "",
     team1_points: null,
     team2_points: null,
     is_golden_point: false,
+    server_name: serverName,
   };
 }
 
@@ -94,24 +98,33 @@ function GameEditor({
       borderColor="gray.100"
     >
       <HStack justify="space-between" mb={4}>
-        <HStack gap={2}>
-          <Box w={1.5} h={4} bg="gray.100" borderRadius="full" />
-          <Text
-            fontSize="xs"
-            fontWeight="900"
-            color="gray.400"
-            letterSpacing="widest"
-            textTransform="uppercase"
-          >
-            Game {game.game_number}
-          </Text>
-        </HStack>
+        <VStack gap={0.5} align="flex-start">
+          <HStack gap={2}>
+            <Box w={1.5} h={4} bg="gray.100" borderRadius="full" />
+            <Text
+              fontSize="xs"
+              fontWeight="900"
+              color="gray.400"
+              letterSpacing="widest"
+              textTransform="uppercase"
+            >
+              Game {game.game_number}
+            </Text>
+          </HStack>
+          {game.server_name && (
+            <Text fontSize="10px" fontWeight="700" color="gray.400" ml={3.5}>
+              Serving: {game.server_name}
+            </Text>
+          )}
+        </VStack>
         <Button
           size="xs"
           variant="ghost"
           color="gray.300"
           _hover={{ color: "red.500", bg: "gray.50" }}
-          onClick={onRemove}
+          onClick={() => {
+            if (window.confirm(`Delete Game ${game.game_number}?`)) onRemove();
+          }}
           borderRadius="full"
         >
           <MdClose size={14} />
@@ -133,7 +146,11 @@ function GameEditor({
                     <Button
                       key={p}
                       onClick={() =>
-                        onChange({ ...game, [ptKey]: pts === p ? null : p })
+                        onChange({
+                          ...game,
+                          winner_team_id: "",
+                          [ptKey]: isWinner ? p : pts === p ? null : p,
+                        })
                       }
                       flex={1}
                       h="42px"
@@ -162,6 +179,7 @@ function GameEditor({
                       [ptKey]: isWinner ? null : "Game",
                     })
                   }
+                  aria-label="Win"
                   flex={1.5}
                   h="42px"
                   bg={isWinner ? color : "white"}
@@ -177,7 +195,7 @@ function GameEditor({
                   }}
                   _active={{ transform: "scale(0.95)" }}
                 >
-                  {isWinner ? "W" : "GAME"}
+                  W
                 </Button>
               </HStack>
             </VStack>
@@ -207,33 +225,14 @@ export default function SetEditor({
 }) {
   const t1Wins = set.games.filter((g) => g.winner_team_id === team1.id).length;
   const t2Wins = set.games.filter((g) => g.winner_team_id === team2.id).length;
-
-  // ── Persist helper ─────────────────────────────────────────────────────────
-
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const saveToDb = (updatedSet: SetRow) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async () => {
-      try {
-        await fetch("/api/matches/scores", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ match_id: matchId, sets: [updatedSet] }),
-        });
-      } catch (e) {
-        console.error("Auto-save failed", e);
-      }
-    }, 500);
-  };
+  const [showServerModal, setShowServerModal] = useState(false);
 
   const commit = (updatedSet: SetRow) => {
     onChange(updatedSet);
-    saveToDb(updatedSet);
   };
 
-  const addGame = () => {
-    const newGames = [emptyGame(0), ...set.games]; // prepend
+  const addGame = (server: MockPlayerStat) => {
+    const newGames = [emptyGame(0, `${server.first_name} ${server.last_name}`), ...set.games]; // prepend
 
     const updatedGames = newGames.map((g, idx, arr) => ({
       ...g,
@@ -310,17 +309,8 @@ export default function SetEditor({
 
   // ── Set delete ────────────────────────────────────────────────────────────
 
-  const handleDeleteSet = async () => {
-    if (set.id) {
-      try {
-        await fetch(`/api/matches/scores?set_id=${set.id}`, {
-          method: "DELETE",
-        });
-      } catch (e) {
-        console.error("Delete set failed", e);
-      }
-    }
-    onRemove();
+  const handleDeleteSet = () => {
+    if (window.confirm(`Delete Set ${set.set_number}?`)) onRemove();
   };
 
   return (
@@ -539,7 +529,7 @@ export default function SetEditor({
             variant="ghost"
             color="gray.400"
             _hover={{ color: "orange.500", bg: "orange.50" }}
-            onClick={addGame}
+            onClick={() => setShowServerModal(true)}
             borderRadius="full"
             fontWeight="800"
             fontSize="xs"
@@ -564,6 +554,19 @@ export default function SetEditor({
           ))}
         </VStack>
       </VStack>
+
+      {showServerModal && (
+        <ServerSelectModal
+          matchId={matchId}
+          team1={team1}
+          team2={team2}
+          onClose={() => setShowServerModal(false)}
+          onSelect={(player) => {
+            addGame(player);
+            setShowServerModal(false);
+          }}
+        />
+      )}
     </Box>
   );
 }

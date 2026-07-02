@@ -10,14 +10,11 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
-import type { ElementType } from "react";
 import { useEffect, useState } from "react";
-import { MdSports, MdAnalytics, MdChevronLeft, MdLock, MdLogout, MdSportsTennis } from "react-icons/md";
+import { MdChevronLeft, MdLock, MdLogout, MdSportsTennis } from "react-icons/md";
 import { formatCategory } from "@/utils/enums";
-import { mockLiveMatches, mockUser } from "@/utils/mockData";
-
-type GSRole = "match_ref" | "scoring_ref";
-type PanelRole = "ref" | "stats";
+import { getLiveMatchForCourt, mockCredentials, type MockRole } from "@/utils/mockData";
+import RefereeDashboard from "@/components/RefereeDashboard";
 
 type Match = {
   id: string;
@@ -29,7 +26,7 @@ type Match = {
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }: { onLogin: (role: GSRole, name: string | null) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (role: MockRole, name: string) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -39,10 +36,16 @@ function LoginScreen({ onLogin }: { onLogin: (role: GSRole, name: string | null)
     e.preventDefault();
     setError("");
     setLoading(true);
-    // Mock login: any non-empty username/password succeeds.
     setTimeout(() => {
       setLoading(false);
-      onLogin(mockUser.role, mockUser.full_name);
+      const cred = mockCredentials.find(
+        (c) => c.username === username && c.password === password,
+      );
+      if (!cred) {
+        setError("Incorrect username or password");
+        return;
+      }
+      onLogin(cred.role, cred.full_name);
     }, 300);
   };
 
@@ -55,10 +58,10 @@ function LoginScreen({ onLogin }: { onLogin: (role: GSRole, name: string | null)
             <MdSportsTennis size={36} color="#f97316" />
           </Box>
           <Text fontSize="2xl" fontWeight="900" letterSpacing="tighter" color="gray.900" lineHeight="1">
-            SLPL <Text as="span" color="orange.500">2026</Text>
+            Gamescore
           </Text>
           <Text fontSize="10px" fontWeight="black" color="gray.400" letterSpacing="widest">
-            GAMESCORE · REFEREE PORTAL
+            UMPIRE / REFEREE PORTAL
           </Text>
         </VStack>
 
@@ -141,50 +144,9 @@ function LoginScreen({ onLogin }: { onLogin: (role: GSRole, name: string | null)
   );
 }
 
-// ─── Panel Selector ───────────────────────────────────────────────────────────
+// ─── Court Selector ───────────────────────────────────────────────────────────
 
-function SelectionCard({
-  title,
-  subtitle,
-  icon: Icon,
-  onClick,
-  colorScheme = "orange",
-}: {
-  title: string;
-  subtitle: string;
-  icon: ElementType;
-  onClick: () => void;
-  colorScheme?: string;
-}) {
-  return (
-    <Box
-      as="button"
-      w="full"
-      onClick={onClick}
-      bg="white"
-      p={6}
-      borderRadius="3xl"
-      border="2px solid"
-      borderColor="gray.100"
-      transition="all 0.2s"
-      _hover={{ borderColor: `${colorScheme}.500`, bg: `${colorScheme}.50` }}
-      _active={{ transform: "translateY(1px)" }}
-      textAlign="left"
-    >
-      <HStack gap={5}>
-        <Box p={4} bg={`${colorScheme}.50`} color={`${colorScheme}.500`} borderRadius="2xl">
-          <Icon size={32} />
-        </Box>
-        <VStack align="flex-start" gap={0}>
-          <Text fontSize="xl" fontWeight="900" color="gray.800">{title}</Text>
-          <Text fontSize="sm" fontWeight="600" color="gray.400">{subtitle}</Text>
-        </VStack>
-      </HStack>
-    </Box>
-  );
-}
-
-function PanelSelector({
+function CourtSelector({
   userName,
   onLogout,
 }: {
@@ -192,27 +154,24 @@ function PanelSelector({
   onLogout: () => void;
 }) {
   const router = useRouter();
-  const [role, setRole] = useState<PanelRole | null>(null);
   // undefined = loading, null = no match, Match = has match
-  const [courtMatches, setCourtMatches] = useState<Record<number, Match | null | undefined>>({});
+  const [courtMatches, setCourtMatches] = useState<Record<number, Match | null | undefined>>({ 1: undefined, 2: undefined });
   const [courtsLoading, setCourtsLoading] = useState(false);
 
   const fetchBothCourts = () => {
     setCourtsLoading(true);
     setCourtMatches({ 1: undefined, 2: undefined });
     setTimeout(() => {
-      const results = [1, 2].map((c) => [c, mockLiveMatches[c] ?? null] as const);
+      const results = [1, 2].map((c) => [c, getLiveMatchForCourt(c) ?? null] as const);
       setCourtMatches(Object.fromEntries(results));
       setCourtsLoading(false);
     }, 300);
   };
 
-  const handleSelectRole = (r: PanelRole) => {
-    setRole(r);
+  useEffect(() => {
     fetchBothCourts();
-  };
-
-  const accentColor = role === "ref" ? "orange" : "blue";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Box minH="100vh" w="full" bg="white" display="flex" alignItems="flex-start" justifyContent="center" p={6}>
@@ -222,10 +181,10 @@ function PanelSelector({
         <HStack justify="space-between" align="start">
           <VStack gap={1} align="start">
             <Text fontSize="3xl" fontWeight="900" letterSpacing="tighter" color="gray.900" lineHeight="1">
-              SLPL <Text as="span" color="orange.500">2026</Text>
+              Gamescore
             </Text>
             <Text fontSize="10px" fontWeight="black" color="gray.400" letterSpacing="widest">
-              GAMESCORE MANAGEMENT
+              REFEREE MANAGEMENT
             </Text>
             {userName && (
               <Text fontSize="xs" color="gray.500" fontWeight="600" mt={0.5}>
@@ -246,161 +205,122 @@ function PanelSelector({
           </Button>
         </HStack>
 
-        {/* Role selection */}
-        {!role && (
-          <VStack gap={4} w="full">
-            <Text fontSize="xs" fontWeight="800" color="gray.500" mb={1}>CHOOSE YOUR PANEL</Text>
-            <SelectionCard
-              title="Referee"
-              subtitle="Manage live match scoring"
-              icon={MdSports}
-              onClick={() => handleSelectRole("ref")}
-              colorScheme="orange"
-            />
-            <SelectionCard
-              title="Player Stats"
-              subtitle="Track individual performance"
-              icon={MdAnalytics}
-              onClick={() => handleSelectRole("stats")}
-              colorScheme="blue"
-            />
-          </VStack>
-        )}
+        <VStack gap={6} w="full">
+          <Text fontSize="10px" fontWeight="black" color="gray.400" letterSpacing="widest" alignSelf="flex-start">
+            SELECT COURT
+          </Text>
 
-        {/* Court cards — shown after role is chosen */}
-        {role && (
-          <VStack gap={6} w="full">
-            <HStack w="full" justify="space-between" align="center">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => { setRole(null); setCourtMatches({}); }}
-                borderRadius="full"
-                color="gray.400"
-                _hover={{ color: "orange.500", bg: "gray.50" }}
-              >
-                <MdChevronLeft size={20} /> Back
-              </Button>
-              <Text fontSize="10px" fontWeight="black" color="gray.400" letterSpacing="widest">
-                SELECT COURT
-              </Text>
-            </HStack>
+          <VStack w="full" gap={4}>
+            {[1, 2].map((c) => {
+              const m = courtMatches[c];
+              const isLoading = courtsLoading || m === undefined;
+              const hasMatch = !isLoading && m !== null;
 
-            <VStack w="full" gap={4}>
-              {[1, 2].map((c) => {
-                const m = courtMatches[c];
-                const isLoading = courtsLoading || m === undefined;
-                const hasMatch = !isLoading && m !== null;
-
-                return (
-                  <Box
-                    key={c}
-                    as={hasMatch ? "button" : "div"}
-                    w="full"
-                    onClick={hasMatch ? () => {
-                      const base = role === "ref"
-                        ? `/ref/court/${c}?role=${role}${m?.match_category ? `&category=${m.match_category}` : ""}`
-                        : `/stats/court/${c}`;
-                      router.push(base);
-                    } : undefined}
-                    bg={!isLoading && !hasMatch ? "gray.50" : "white"}
-                    borderRadius="2xl"
-                    border="2px solid"
-                    borderColor={hasMatch ? `${accentColor}.200` : "gray.100"}
-                    overflow="hidden"
-                    transition="all 0.2s"
-                    opacity={!isLoading && !hasMatch ? 0.5 : 1}
-                    cursor={hasMatch ? "pointer" : "not-allowed"}
-                    pointerEvents={!isLoading && !hasMatch ? "none" : "auto"}
-                    _hover={hasMatch ? { borderColor: `${accentColor}.400`, bg: `${accentColor}.50` } : {}}
+              return (
+                <Box
+                  key={c}
+                  as={hasMatch ? "button" : "div"}
+                  w="full"
+                  onClick={hasMatch ? () => {
+                    router.push(`/ref/court/${c}${m?.match_category ? `?category=${m.match_category}` : ""}`);
+                  } : undefined}
+                  bg={!isLoading && !hasMatch ? "gray.50" : "white"}
+                  borderRadius="2xl"
+                  border="2px solid"
+                  borderColor={hasMatch ? "orange.200" : "gray.100"}
+                  overflow="hidden"
+                  transition="all 0.2s"
+                  opacity={!isLoading && !hasMatch ? 0.5 : 1}
+                  cursor={hasMatch ? "pointer" : "not-allowed"}
+                  pointerEvents={!isLoading && !hasMatch ? "none" : "auto"}
+                  _hover={hasMatch ? { borderColor: "orange.400", bg: "orange.50" } : {}}
+                >
+                  {/* Court header */}
+                  <HStack
+                    px={4}
+                    py={2}
+                    bg={hasMatch ? "orange.50" : "gray.50"}
+                    justify="space-between"
                   >
-                    {/* Court header */}
-                    <HStack
-                      px={4}
-                      py={2}
-                      bg={hasMatch ? `${accentColor}.50` : "gray.50"}
-                      justify="space-between"
+                    <Text
+                      fontSize="10px"
+                      fontWeight="black"
+                      letterSpacing="widest"
+                      color={hasMatch ? "orange.500" : "gray.400"}
                     >
-                      <Text
-                        fontSize="10px"
-                        fontWeight="black"
-                        letterSpacing="widest"
-                        color={hasMatch ? `${accentColor}.500` : "gray.400"}
+                      COURT {c}
+                    </Text>
+                    {isLoading ? (
+                      <Spinner size="xs" color="gray.300" />
+                    ) : hasMatch ? (
+                      <Box
+                        px={2}
+                        py={0.5}
+                        bg="orange.100"
+                        borderRadius="full"
                       >
-                        COURT {c}
+                        <Text fontSize="8px" fontWeight="black" color="orange.600" letterSpacing={1}>
+                          LIVE
+                        </Text>
+                      </Box>
+                    ) : (
+                      <Text fontSize="8px" fontWeight="black" color="gray.300" letterSpacing={1}>
+                        NO MATCH
                       </Text>
-                      {isLoading ? (
-                        <Spinner size="xs" color="gray.300" />
-                      ) : hasMatch ? (
+                    )}
+                  </HStack>
+
+                  {/* Court body */}
+                  <Box px={4} py={3}>
+                    {isLoading ? (
+                      <Text fontSize="xs" color="gray.300" fontWeight="600">Checking for live match...</Text>
+                    ) : hasMatch ? (
+                      <HStack justify="space-between" align="center">
+                        <VStack align="start" gap={0} flex={1} minW={0}>
+                          <Text fontSize="sm" fontWeight="900" color="gray.800">
+                            {m?.team1?.team_name ?? "TBD"}
+                          </Text>
+                          <Text fontSize="xs" color="gray.400" fontWeight="700">vs {m?.team2?.team_name ?? "TBD"}</Text>
+                          {m?.match_category && (
+                            <Text fontSize="8px" fontWeight="black" color="gray.300" letterSpacing={1} mt={0.5}>
+                              {formatCategory(m.match_category).toUpperCase()}
+                            </Text>
+                          )}
+                        </VStack>
                         <Box
-                          px={2}
-                          py={0.5}
-                          bg={`${accentColor}.100`}
-                          borderRadius="full"
+                          px={3}
+                          py={1.5}
+                          bg="orange.500"
+                          borderRadius="xl"
+                          flexShrink={0}
                         >
-                          <Text fontSize="8px" fontWeight="black" color={`${accentColor}.600`} letterSpacing={1}>
-                            LIVE
+                          <Text fontSize="10px" fontWeight="black" color="white" letterSpacing={1}>
+                            OPEN →
                           </Text>
                         </Box>
-                      ) : (
-                        <Text fontSize="8px" fontWeight="black" color="gray.300" letterSpacing={1}>
-                          NO MATCH
-                        </Text>
-                      )}
-                    </HStack>
-
-                    {/* Court body */}
-                    <Box px={4} py={3}>
-                      {isLoading ? (
-                        <Text fontSize="xs" color="gray.300" fontWeight="600">Checking for live match...</Text>
-                      ) : hasMatch ? (
-                        <HStack justify="space-between" align="center">
-                          <VStack align="start" gap={0} flex={1} minW={0}>
-                            <Text fontSize="sm" fontWeight="900" color="gray.800">
-                              {m?.team1?.team_name ?? "TBD"}
-                            </Text>
-                            <Text fontSize="xs" color="gray.400" fontWeight="700">vs {m?.team2?.team_name ?? "TBD"}</Text>
-                            {m?.match_category && (
-                              <Text fontSize="8px" fontWeight="black" color="gray.300" letterSpacing={1} mt={0.5}>
-                                {formatCategory(m.match_category).toUpperCase()}
-                              </Text>
-                            )}
-                          </VStack>
-                          <Box
-                            px={3}
-                            py={1.5}
-                            bg={`${accentColor}.500`}
-                            borderRadius="xl"
-                            flexShrink={0}
-                          >
-                            <Text fontSize="10px" fontWeight="black" color="white" letterSpacing={1}>
-                              {role === "ref" ? "OPEN →" : "STATS →"}
-                            </Text>
-                          </Box>
-                        </HStack>
-                      ) : (
-                        <Text fontSize="xs" color="gray.400" fontWeight="600">No matches available</Text>
-                      )}
-                    </Box>
+                      </HStack>
+                    ) : (
+                      <Text fontSize="xs" color="gray.400" fontWeight="600">No matches available</Text>
+                    )}
                   </Box>
-                );
-              })}
-            </VStack>
-
-            <Button
-              variant="ghost"
-              w="full"
-              onClick={fetchBothCourts}
-              color="gray.400"
-              fontSize="xs"
-              fontWeight="black"
-              letterSpacing="widest"
-              loading={courtsLoading}
-            >
-              REFRESH
-            </Button>
+                </Box>
+              );
+            })}
           </VStack>
-        )}
+
+          <Button
+            variant="ghost"
+            w="full"
+            onClick={fetchBothCourts}
+            color="gray.400"
+            fontSize="xs"
+            fontWeight="black"
+            letterSpacing="widest"
+            loading={courtsLoading}
+          >
+            REFRESH
+          </Button>
+        </VStack>
 
       </VStack>
     </Box>
@@ -409,26 +329,38 @@ function PanelSelector({
 
 // ─── Root Page ────────────────────────────────────────────────────────────────
 
+const SESSION_KEY = "gamescore.session";
+
 export default function RootPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [role, setRole] = useState<MockRole | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
-    // No backend session to check — start logged out.
-    setLoggedIn(false);
-    setUserName(null);
+    // No backend session — restore the mock session from this tab only.
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      setLoggedIn(true);
+      setRole(parsed.role ?? null);
+      setUserName(parsed.userName ?? null);
+    }
     setAuthChecked(true);
   }, []);
 
-  const handleLogin = (_role: GSRole, name: string | null) => {
+  const handleLogin = (r: MockRole, name: string) => {
     setUserName(name);
+    setRole(r);
     setLoggedIn(true);
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ role: r, userName: name }));
   };
 
   const handleLogout = () => {
     setLoggedIn(false);
+    setRole(null);
     setUserName(null);
+    sessionStorage.removeItem(SESSION_KEY);
   };
 
   if (!authChecked) {
@@ -439,9 +371,13 @@ export default function RootPage() {
     );
   }
 
-  if (!loggedIn) {
+  if (!loggedIn || !role) {
     return <LoginScreen onLogin={handleLogin} />;
   }
 
-  return <PanelSelector userName={userName} onLogout={handleLogout} />;
+  if (role === "referee") {
+    return <RefereeDashboard userName={userName} onLogout={handleLogout} />;
+  }
+
+  return <CourtSelector userName={userName} onLogout={handleLogout} />;
 }

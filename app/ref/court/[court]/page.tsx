@@ -4,9 +4,10 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Box, HStack, Text, Spinner, VStack, Button } from "@chakra-ui/react";
 import SetEditor, { type SetRow } from "@/components/setEditor";
+import ServerSelectModal from "@/components/ServerSelectModal";
 import { formatCategory } from "@/utils/enums";
 import { MdAdd } from "react-icons/md";
-import { mockLiveMatches, mockSetsByMatch, nextMockId } from "@/utils/mockData";
+import { getLiveMatchForCourt, mockSetsByMatch, nextMockId, type MockPlayerStat } from "@/utils/mockData";
 
 type Team = { id: string; team_name: string; logo?: string | null };
 
@@ -25,6 +26,7 @@ export default function RefCourtPage() {
   const [addingSet, setAddingSet] = useState(false);
 
   const [activeSetIndex, setActiveSetIndex] = useState(0);
+  const [showServerModal, setShowServerModal] = useState(false);
 
   // Fetch live match + scores
   useEffect(() => {
@@ -32,7 +34,7 @@ export default function RefCourtPage() {
 
     const load = () => {
       setLoading(true);
-      const match = mockLiveMatches[court];
+      const match = getLiveMatchForCourt(court);
       if (!match) {
         setTeam1(null);
         setTeam2(null);
@@ -57,107 +59,30 @@ export default function RefCourtPage() {
     load();
   }, [court]);
 
-  // Compute scoreboard payload from current sets and push to Google Sheets
-  const pushScoreboard = (allSets: SetRow[]) => {
-    if (!team1 || !team2) return;
-
-    // Sort ascending by set_number for set1/set2/set3 columns
-    const sorted = [...allSets].sort((a, b) => a.set_number - b.set_number);
-
-    const gamesWon = (set: SetRow, teamId: string) =>
-      set.games.filter((g) => g.winner_team_id === teamId).length;
-
-    // Current game points: tiebreak if active, otherwise latest game without a winner
-    const latestSet = sorted[sorted.length - 1];
-    const activeGame = latestSet?.games.find((g) => !g.winner_team_id);
-    const tiebreak = latestSet?.tiebreak;
-
-    const POINT_MAP: Record<string, number> = { "0": 0, "15": 1, "30": 2, "40": 3, "Game": 4, "game": 4, "GAME": 4 };
-    const toPointVal = (p: string | null | undefined) => POINT_MAP[p ?? ""] ?? 0;
-
-    // Current game display points — raw tennis values (0,15,30,40,Game) or tiebreak raw number
-    const t1_game_points = tiebreak
-      ? (tiebreak.team1_tie_points ?? 0)
-      : (activeGame?.team1_points ?? 0);
-    const t2_game_points = tiebreak
-      ? (tiebreak.team2_tie_points ?? 0)
-      : (activeGame?.team2_points ?? 0);
-
-    // Total match points: same mapping as matchview (0/1/2/3/4) summed across all games + tiebreaks
-    const t1_match_points = sorted.reduce((total, s) => {
-      const gameSum = s.games.reduce((sum, g) => sum + toPointVal(g.team1_points), 0);
-      const tbSum = s.tiebreak?.team1_tie_points ?? 0;
-      return total + gameSum + tbSum;
-    }, 0);
-    const t2_match_points = sorted.reduce((total, s) => {
-      const gameSum = s.games.reduce((sum, g) => sum + toPointVal(g.team2_points), 0);
-      const tbSum = s.tiebreak?.team2_tie_points ?? 0;
-      return total + gameSum + tbSum;
-    }, 0);
-
-    // Sets won in this match
-    const t1_sets_won = sorted.filter((s) => s.winner_team_id === team1.id).length;
-    const t2_sets_won = sorted.filter((s) => s.winner_team_id === team2.id).length;
-
-    // Total games won across all sets
-    const t1_games_won = sorted.reduce((acc, s) => acc + gamesWon(s, team1.id), 0);
-    const t2_games_won = sorted.reduce((acc, s) => acc + gamesWon(s, team2.id), 0);
-
-    fetch("/api/scoreboard", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        court_number: court,
-        team1_id: team1.id,
-        team2_id: team2.id,
-        t1_name: team1.team_name,
-        t1_logo: team1.logo ?? "",
-        t1_game_points,
-        t1_set1: sorted[0] != null ? gamesWon(sorted[0], team1.id) : "",
-        t1_set2: sorted[1] != null ? gamesWon(sorted[1], team1.id) : "",
-        t1_set3: sorted[2] != null ? gamesWon(sorted[2], team1.id) : "",
-        t1_sets_won,
-        t1_games_won,
-        t1_match_points,
-        t2_name: team2.team_name,
-        t2_logo: team2.logo ?? "",
-        t2_game_points,
-        t2_set1: sorted[0] != null ? gamesWon(sorted[0], team2.id) : "",
-        t2_set2: sorted[1] != null ? gamesWon(sorted[1], team2.id) : "",
-        t2_set3: sorted[2] != null ? gamesWon(sorted[2], team2.id) : "",
-        t2_sets_won,
-        t2_games_won,
-        t2_match_points,
-        match_category: category ?? "",
-        match_stage: matchStage,
-      }),
-    }).catch(console.error);
-  };
-
-  // Creates the set row in DB immediately, then adds to state with the real id
-  const addSet = async () => {
+  // Adds a new set to local state (mock — no backend persistence)
+  const addSet = (server: MockPlayerStat) => {
     if (!matchId) return;
     setAddingSet(true);
-    try {
-      const nextNum = sets.length + 1;
-      const res = await fetch("/api/matches/scores", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ match_id: matchId, set_number: nextNum }),
-      });
-      const data = await res.json();
-      if (data.id) {
-        const newSet: SetRow = { id: data.id, set_number: data.set_number, winner_team_id: "", games: [], tiebreak: null };
-        setSets((prev) => {
-          const updated = [newSet, ...prev];
-          pushScoreboard(updated);
-          return updated;
-        });
-        setActiveSetIndex(0);
-      }
-    } finally {
-      setAddingSet(false);
-    }
+    const nextNum = sets.length + 1;
+    const newSet: SetRow = {
+      id: nextMockId("set"),
+      set_number: nextNum,
+      winner_team_id: "",
+      games: [
+        {
+          game_number: 1,
+          winner_team_id: "",
+          team1_points: null,
+          team2_points: null,
+          is_golden_point: false,
+          server_name: `${server.first_name} ${server.last_name}`,
+        },
+      ],
+      tiebreak: null,
+    };
+    setSets((prev) => [newSet, ...prev]);
+    setActiveSetIndex(0);
+    setAddingSet(false);
   };
 
   if (loading) return <Spinner size="xl" mx="auto" mt="20" />;
@@ -253,7 +178,7 @@ export default function RefCourtPage() {
             _hover={{ bg: "orange.600" }}
             _active={{ transform: "translateY(1px)" }}
             transition="all 0.1s"
-            onClick={addSet}
+            onClick={() => setShowServerModal(true)}
             loading={addingSet}
 
           >
@@ -284,11 +209,7 @@ export default function RefCourtPage() {
                   team1={team1}
                   team2={team2}
                   onChange={(updated) => {
-                    setSets((prev) => {
-                      const next = prev.map((p, i) => (i === idx ? updated : p));
-                      pushScoreboard(next);
-                      return next;
-                    });
+                    setSets((prev) => prev.map((p, i) => (i === idx ? updated : p)));
                   }}
                   onRemove={() =>
                     setSets((prev) => prev.filter((_, i) => i !== idx))
@@ -299,6 +220,19 @@ export default function RefCourtPage() {
           )}
         </VStack>
       </VStack>
+
+      {showServerModal && (
+        <ServerSelectModal
+          matchId={matchId}
+          team1={team1}
+          team2={team2}
+          onClose={() => setShowServerModal(false)}
+          onSelect={(player) => {
+            addSet(player);
+            setShowServerModal(false);
+          }}
+        />
+      )}
     </Box>
   );
 }
