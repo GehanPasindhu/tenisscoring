@@ -6,6 +6,7 @@ import { Box, HStack, Text, Spinner, VStack, Button } from "@chakra-ui/react";
 import SetEditor, { type SetRow } from "@/components/setEditor";
 import { formatCategory } from "@/utils/enums";
 import { MdAdd } from "react-icons/md";
+import { mockLiveMatches, mockSetsByMatch, nextMockId } from "@/utils/mockData";
 
 type Team = { id: string; team_name: string; logo?: string | null };
 
@@ -29,37 +30,28 @@ export default function RefCourtPage() {
   useEffect(() => {
     if (!court) return;
 
-    const load = async () => {
+    const load = () => {
       setLoading(true);
-      try {
-        const res = await fetch(`/api/live-match?court=${court}`);
-        const match = await res.json();
-        if (!match) {
-          setLoading(false);
-          return;
-        }
-
-        setMatchId(match.id);
-        setMatchStage(match.match_stage ?? "group");
-        setTeam1(match.team1);
-        setTeam2(match.team2);
-
-        const scoreRes = await fetch(
-          `/api/matches/scores?match_id=${match.id}`,
-        );
-        const scoreData = await scoreRes.json();
-
-        // Sort existing sets newest first (highest set_number at top)
-        const sorted = (scoreData.sets ?? [])
-          .sort((a: SetRow, b: SetRow) => b.set_number - a.set_number);
-        setSets(sorted);
-      } catch {
+      const match = mockLiveMatches[court];
+      if (!match) {
         setTeam1(null);
         setTeam2(null);
         setSets([]);
-      } finally {
         setLoading(false);
+        return;
       }
+
+      setMatchId(match.id);
+      setMatchStage(match.match_stage ?? "group");
+      setTeam1(match.team1);
+      setTeam2(match.team2);
+
+      // Sort existing sets newest first (highest set_number at top)
+      const sorted = (mockSetsByMatch[match.id] ?? [])
+        .slice()
+        .sort((a: SetRow, b: SetRow) => b.set_number - a.set_number);
+      setSets(sorted);
+      setLoading(false);
     };
 
     load();

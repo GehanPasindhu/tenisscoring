@@ -14,6 +14,7 @@ import type { ElementType } from "react";
 import { useEffect, useState } from "react";
 import { MdSports, MdAnalytics, MdChevronLeft, MdLock, MdLogout, MdSportsTennis } from "react-icons/md";
 import { formatCategory } from "@/utils/enums";
+import { mockLiveMatches, mockUser } from "@/utils/mockData";
 
 type GSRole = "match_ref" | "scoring_ref";
 type PanelRole = "ref" | "stats";
@@ -34,24 +35,15 @@ function LoginScreen({ onLogin }: { onLogin: (role: GSRole, name: string | null)
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
-    try {
-      const res = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const d = await res.json();
-      if (!res.ok) { setError(d.error ?? "Login failed"); return; }
-      onLogin(d.role, d.full_name ?? null);
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
+    // Mock login: any non-empty username/password succeeds.
+    setTimeout(() => {
       setLoading(false);
-    }
+      onLogin(mockUser.role, mockUser.full_name);
+    }, 300);
   };
 
   return (
@@ -205,22 +197,14 @@ function PanelSelector({
   const [courtMatches, setCourtMatches] = useState<Record<number, Match | null | undefined>>({});
   const [courtsLoading, setCourtsLoading] = useState(false);
 
-  const fetchBothCourts = async () => {
+  const fetchBothCourts = () => {
     setCourtsLoading(true);
     setCourtMatches({ 1: undefined, 2: undefined });
-    const results = await Promise.all(
-      [1, 2].map(async (c) => {
-        try {
-          const res = await fetch(`/api/live-match?court=${c}`);
-          const data = await res.json();
-          return [c, data ?? null] as const;
-        } catch {
-          return [c, null] as const;
-        }
-      }),
-    );
-    setCourtMatches(Object.fromEntries(results));
-    setCourtsLoading(false);
+    setTimeout(() => {
+      const results = [1, 2].map((c) => [c, mockLiveMatches[c] ?? null] as const);
+      setCourtMatches(Object.fromEntries(results));
+      setCourtsLoading(false);
+    }, 300);
   };
 
   const handleSelectRole = (r: PanelRole) => {
@@ -431,13 +415,10 @@ export default function RootPage() {
   const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/auth")
-      .then((r) => r.json())
-      .then((d) => {
-        setLoggedIn(d.loggedIn);
-        setUserName(d.full_name ?? null);
-      })
-      .finally(() => setAuthChecked(true));
+    // No backend session to check — start logged out.
+    setLoggedIn(false);
+    setUserName(null);
+    setAuthChecked(true);
   }, []);
 
   const handleLogin = (_role: GSRole, name: string | null) => {
@@ -445,8 +426,7 @@ export default function RootPage() {
     setLoggedIn(true);
   };
 
-  const handleLogout = async () => {
-    await fetch("/api/auth", { method: "DELETE" });
+  const handleLogout = () => {
     setLoggedIn(false);
     setUserName(null);
   };
