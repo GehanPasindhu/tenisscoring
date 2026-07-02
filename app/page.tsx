@@ -13,40 +13,30 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { MdChevronLeft, MdLock, MdLogout, MdSportsTennis } from "react-icons/md";
 import { formatCategory } from "@/utils/enums";
-import { getLiveMatchForCourt, mockCredentials, type MockRole } from "@/utils/mockData";
+import { fetchLiveMatch, login } from "@/utils/api";
+import type { Match, Role } from "@/utils/types";
 import RefereeDashboard from "@/components/RefereeDashboard";
-
-type Match = {
-  id: string;
-  team1: { team_name: string; logo: string; color: string } | null;
-  team2: { team_name: string; logo: string; color: string } | null;
-  court: number;
-  match_category: string;
-};
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }: { onLogin: (role: MockRole, name: string) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (role: Role, name: string) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      const cred = mockCredentials.find(
-        (c) => c.username === username && c.password === password,
-      );
-      if (!cred) {
-        setError("Incorrect username or password");
-        return;
-      }
+    try {
+      const cred = await login(username, password);
       onLogin(cred.role, cred.full_name);
-    }, 300);
+    } catch {
+      setError("Incorrect username or password");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -158,14 +148,14 @@ function CourtSelector({
   const [courtMatches, setCourtMatches] = useState<Record<number, Match | null | undefined>>({ 1: undefined, 2: undefined });
   const [courtsLoading, setCourtsLoading] = useState(false);
 
-  const fetchBothCourts = () => {
+  const fetchBothCourts = async () => {
     setCourtsLoading(true);
     setCourtMatches({ 1: undefined, 2: undefined });
-    setTimeout(() => {
-      const results = [1, 2].map((c) => [c, getLiveMatchForCourt(c) ?? null] as const);
-      setCourtMatches(Object.fromEntries(results));
-      setCourtsLoading(false);
-    }, 300);
+    const results = await Promise.all(
+      [1, 2].map(async (c) => [c, (await fetchLiveMatch(c)) ?? null] as const),
+    );
+    setCourtMatches(Object.fromEntries(results));
+    setCourtsLoading(false);
   };
 
   useEffect(() => {
@@ -334,7 +324,7 @@ const SESSION_KEY = "gamescore.session";
 export default function RootPage() {
   const [authChecked, setAuthChecked] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
-  const [role, setRole] = useState<MockRole | null>(null);
+  const [role, setRole] = useState<Role | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -349,7 +339,7 @@ export default function RootPage() {
     setAuthChecked(true);
   }, []);
 
-  const handleLogin = (r: MockRole, name: string) => {
+  const handleLogin = (r: Role, name: string) => {
     setUserName(name);
     setRole(r);
     setLoggedIn(true);

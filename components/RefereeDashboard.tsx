@@ -1,25 +1,24 @@
 "use client";
 
-import { Box, Button, HStack, Input, Text, VStack } from "@chakra-ui/react";
-import { useState } from "react";
-import { MdAdd, MdClose, MdLogout, MdTableChart } from "react-icons/md";
+import { Box, Button, HStack, Input, Spinner, Text, VStack } from "@chakra-ui/react";
+import { useEffect, useState } from "react";
+import { MdAdd, MdClose, MdExpandLess, MdExpandMore, MdLogout, MdTableChart } from "react-icons/md";
 import { GiTennisBall } from "react-icons/gi";
 import { formatCategory } from "@/utils/enums";
 import {
-  assignMatch,
-  deleteMatch,
-  mockMatches,
-  mockSetsByMatch,
-  setMatchStatus,
-  updateMatch,
-  type MockMatch,
-  type MockMatchStatus,
-} from "@/utils/mockData";
+  createMatch,
+  deleteMatch as apiDeleteMatch,
+  fetchMatchDetail,
+  fetchMatches,
+  setMatchStatus as apiSetMatchStatus,
+  updateMatch as apiUpdateMatch,
+} from "@/utils/api";
+import type { Match, MatchDetail, MatchStatus } from "@/utils/types";
 
 const CATEGORIES = ["mens_singles", "womens_singles", "mens_double", "womens_double", "mixed_double"] as const;
 const COURTS = [1, 2];
-const STATUS_FLOW: MockMatchStatus[] = ["scheduled", "live", "completed"];
-const STATUS_STYLE: Record<MockMatchStatus, { bg: string; color: string }> = {
+const STATUS_FLOW: MatchStatus[] = ["scheduled", "live", "completed"];
+const STATUS_STYLE: Record<MatchStatus, { bg: string; color: string }> = {
   scheduled: { bg: "gray.100", color: "gray.600" },
   live: { bg: "orange.100", color: "orange.600" },
   completed: { bg: "green.100", color: "green.700" },
@@ -29,21 +28,46 @@ function playersNeeded(category: string): number {
   return category.endsWith("_singles") ? 1 : 2;
 }
 
-function readMatches(): MockMatch[] {
-  return [...mockMatches].sort((a, b) => a.court - b.court || a.id.localeCompare(b.id));
-}
-
 // A team's display name may join multiple players with " / " (doubles pairs).
-function isServingSide(teamName: string, serverName: string | null): boolean {
-  if (!serverName) return false;
-  return teamName.split(" / ").includes(serverName);
+// Renders each player individually, tagging the one currently serving with a ball icon.
+function TeamNameWithServer({
+  teamName,
+  serverName,
+  fontSize = "md",
+  fontWeight = "900",
+  color = "gray.800",
+}: {
+  teamName: string;
+  serverName: string | null;
+  fontSize?: string;
+  fontWeight?: string;
+  color?: string;
+}) {
+  const target = serverName?.trim() ?? null;
+  const names = teamName.split(" / ");
+
+  return (
+    <Text as="span" fontSize={fontSize} fontWeight={fontWeight} color={color}>
+      {names.map((name, i) => (
+        <Text as="span" key={i}>
+          {i > 0 && " / "}
+          {name}
+          {target != null && name.trim() === target && (
+            <Text as="span" ml={1}>
+              (<GiTennisBall style={{ display: "inline", verticalAlign: "middle" }} size={12} color="#f97316" />)
+            </Text>
+          )}
+        </Text>
+      ))}
+    </Text>
+  );
 }
 
 // ─── Create / Edit Match Modal ─────────────────────────────────────────────
 
 type MatchModalTarget =
   | { mode: "create"; presetCourt?: number }
-  | { mode: "edit"; matchId: string };
+  | { mode: "edit"; match: Match };
 
 function MatchModal({
   target,
@@ -55,7 +79,7 @@ function MatchModal({
   onSaved: () => void;
 }) {
   const isEdit = target.mode === "edit";
-  const editingMatch = isEdit ? mockMatches.find((m) => m.id === target.matchId) ?? null : null;
+  const editingMatch = isEdit ? target.match : null;
 
   const [category, setCategory] = useState<(typeof CATEGORIES)[number]>(
     (editingMatch?.match_category as (typeof CATEGORIES)[number]) ?? "mens_singles",
@@ -66,7 +90,7 @@ function MatchModal({
   const needed = playersNeeded(category);
   const courtLocked = isEdit || target.presetCourt != null;
 
-  const initialNames = (match: MockMatch | null, side: "team1" | "team2", count: number) => {
+  const initialNames = (match: Match | null, side: "team1" | "team2", count: number) => {
     const names = match ? match[side].team_name.split(" / ") : [];
     return Array.from({ length: count }, (_, i) => names[i] ?? "");
   };
@@ -74,6 +98,7 @@ function MatchModal({
   const [sideA, setSideA] = useState<string[]>(initialNames(editingMatch, "team1", needed));
   const [sideB, setSideB] = useState<string[]>(initialNames(editingMatch, "team2", needed));
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const handleCategoryChange = (c: (typeof CATEGORIES)[number]) => {
     const n = playersNeeded(c);
@@ -82,19 +107,26 @@ function MatchModal({
     setSideB((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? ""));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const cleanA = sideA.map((n) => n.trim());
     const cleanB = sideB.map((n) => n.trim());
     if (cleanA.some((n) => !n) || cleanB.some((n) => !n)) {
       setError("Enter a name for every player.");
       return;
     }
-    if (isEdit) {
-      updateMatch(target.matchId, category, cleanA, cleanB);
-    } else {
-      assignMatch(court, category, cleanA, cleanB);
+    setSaving(true);
+    try {
+      if (isEdit) {
+        await apiUpdateMatch(target.match.id, category, cleanA, cleanB);
+      } else {
+        await createMatch(court, category, cleanA, cleanB);
+      }
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save match.");
+    } finally {
+      setSaving(false);
     }
-    onSaved();
   };
 
   return (
@@ -200,7 +232,15 @@ function MatchModal({
             </Box>
           )}
 
-          <Button bg="orange.500" color="white" borderRadius="xl" fontWeight="black" _hover={{ bg: "orange.600" }} onClick={handleSave}>
+          <Button
+            bg="orange.500"
+            color="white"
+            borderRadius="xl"
+            fontWeight="black"
+            _hover={{ bg: "orange.600" }}
+            onClick={handleSave}
+            loading={saving}
+          >
             {isEdit ? "Save Changes" : "Create Match"}
           </Button>
         </VStack>
@@ -212,8 +252,17 @@ function MatchModal({
 // ─── View Match Modal ──────────────────────────────────────────────────────
 
 function ViewMatchModal({ matchId, onClose }: { matchId: string; onClose: () => void }) {
-  const match = mockMatches.find((m) => m.id === matchId) ?? null;
-  const sets = match ? mockSetsByMatch[match.id] ?? [] : [];
+  const [match, setMatch] = useState<MatchDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedSetId, setExpandedSetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMatchDetail(matchId)
+      .then(setMatch)
+      .finally(() => setLoading(false));
+  }, [matchId]);
+
+  const sets = match?.sets ?? [];
   const sortedSets = [...sets].sort((a, b) => a.set_number - b.set_number);
   const latestSet = [...sets].sort((a, b) => b.set_number - a.set_number)[0];
   const activeGame = latestSet?.games.find((g) => !g.winner_team_id);
@@ -241,7 +290,9 @@ function ViewMatchModal({ matchId, onClose }: { matchId: string; onClose: () => 
           </Button>
         </HStack>
 
-        {!match ? (
+        {loading ? (
+          <Spinner size="sm" color="orange.500" />
+        ) : !match ? (
           <Text fontSize="sm" color="gray.400">Match not found.</Text>
         ) : (
           <VStack align="stretch" gap={4}>
@@ -249,36 +300,11 @@ function ViewMatchModal({ matchId, onClose }: { matchId: string; onClose: () => 
               <Text fontSize="10px" fontWeight="black" color="gray.400" letterSpacing="widest">
                 {formatCategory(match.match_category).toUpperCase()} · {match.match_status.toUpperCase()}
               </Text>
-              {match.match_category.endsWith("_singles") ? (
-                <HStack gap={1.5} mt={1}>
-                  {isServingSide(match.team1.team_name, currentServerName) && (
-                    <GiTennisBall size={13} color="#f97316" />
-                  )}
-                  <Text fontSize="md" fontWeight="900" color="gray.800">
-                    {match.team1.team_name}
-                    <Text as="span" color="gray.300" fontWeight="400" mx={2}>vs</Text>
-                    {match.team2.team_name}
-                  </Text>
-                  {isServingSide(match.team2.team_name, currentServerName) && (
-                    <GiTennisBall size={13} color="#f97316" />
-                  )}
-                </HStack>
-              ) : (
-                <>
-                  <HStack gap={1.5} mt={1}>
-                    {isServingSide(match.team1.team_name, currentServerName) && (
-                      <GiTennisBall size={12} color="#f97316" />
-                    )}
-                    <Text fontSize="md" fontWeight="900" color="gray.800">{match.team1.team_name}</Text>
-                  </HStack>
-                  <HStack gap={1.5}>
-                    {isServingSide(match.team2.team_name, currentServerName) && (
-                      <GiTennisBall size={12} color="#f97316" />
-                    )}
-                    <Text fontSize="sm" color="gray.400" fontWeight="700">vs {match.team2.team_name}</Text>
-                  </HStack>
-                </>
-              )}
+              <Text mt={1}>
+                <TeamNameWithServer teamName={match.team1.team_name} serverName={currentServerName} />
+                <Text as="span" color="gray.300" fontWeight="400" mx={2}>vs</Text>
+                <TeamNameWithServer teamName={match.team2.team_name} serverName={currentServerName} />
+              </Text>
             </Box>
 
             <VStack align="stretch" gap={2}>
@@ -302,47 +328,96 @@ function ViewMatchModal({ matchId, onClose }: { matchId: string; onClose: () => 
                     const gamesT1 = s.games.filter((g) => g.winner_team_id === match.team1.id).length;
                     const gamesT2 = s.games.filter((g) => g.winner_team_id === match.team2.id).length;
 
+                    // Fall back to comparing tiebreak points directly when winner_team_id
+                    // wasn't persisted, so a completed tiebreak still displays correctly.
+                    let setWinner = s.winner_team_id;
+                    if (!setWinner && s.tiebreak?.team1_tie_points != null && s.tiebreak?.team2_tie_points != null) {
+                      if (s.tiebreak.team1_tie_points > s.tiebreak.team2_tie_points) setWinner = match.team1.id;
+                      else if (s.tiebreak.team2_tie_points > s.tiebreak.team1_tie_points) setWinner = match.team2.id;
+                    }
+
                     // A tiebreak-decided set folds into the game score: winner gets +1
                     // (e.g. 6 games + tiebreak win = 7), loser shows their tiebreak
                     // points as a superscript (e.g. 6²).
-                    const tbWinsT1 = s.tiebreak && s.winner_team_id === match.team1.id;
-                    const tbWinsT2 = s.tiebreak && s.winner_team_id === match.team2.id;
+                    const tbWinsT1 = s.tiebreak && setWinner === match.team1.id;
+                    const tbWinsT2 = s.tiebreak && setWinner === match.team2.id;
                     const t1 = tbWinsT1 ? gamesT1 + 1 : gamesT1;
                     const t2 = tbWinsT2 ? gamesT2 + 1 : gamesT2;
                     const t1Sup = tbWinsT2 ? s.tiebreak?.team1_tie_points : null;
                     const t2Sup = tbWinsT1 ? s.tiebreak?.team2_tie_points : null;
 
+                    const isExpanded = expandedSetId === s.id;
+                    const gamesAsc = [...s.games].sort((a, b) => a.game_number - b.game_number);
+
                     return (
-                      <VStack key={s.id} align="stretch" gap={0} bg="gray.50" borderRadius="lg" px={3} py={2}>
-                        <HStack justify="space-between">
-                          <HStack flex={1} gap={0.5} align="flex-start">
-                            <Text fontSize="lg" fontWeight="900" color="gray.800">{t1}</Text>
-                            {t1Sup != null && (
-                              <Text fontSize="10px" fontWeight="800" color="gray.400" mt={0.5}>{t1Sup}</Text>
-                            )}
-                          </HStack>
-                          <Text w="40px" textAlign="center" fontSize="10px" color="gray.400" fontWeight="700">
-                            {s.set_number}
-                          </Text>
-                          <HStack flex={1} gap={0.5} align="flex-start" justify="flex-end">
-                            {t2Sup != null && (
-                              <Text fontSize="10px" fontWeight="800" color="gray.400" mt={0.5}>{t2Sup}</Text>
-                            )}
-                            <Text fontSize="lg" fontWeight="900" color="gray.800">{t2}</Text>
-                          </HStack>
-                        </HStack>
-                        {s.tiebreak && !s.winner_team_id && (
+                      <Box
+                        key={s.id}
+                        bg="gray.50"
+                        borderRadius="lg"
+                        overflow="hidden"
+                        cursor="pointer"
+                        onClick={() => setExpandedSetId(isExpanded ? null : s.id)}
+                      >
+                        <VStack align="stretch" gap={0} px={3} py={2}>
                           <HStack justify="space-between">
-                            <Text flex={1} fontSize="xs" color="gray.400" fontWeight="700">
-                              TB {s.tiebreak.team1_tie_points ?? 0}
-                            </Text>
-                            <Box w="40px" />
-                            <Text flex={1} textAlign="right" fontSize="xs" color="gray.400" fontWeight="700">
-                              TB {s.tiebreak.team2_tie_points ?? 0}
-                            </Text>
+                            <HStack flex={1} gap={0.5} align="flex-start">
+                              <Text fontSize="lg" fontWeight="900" color="gray.800">{t1}</Text>
+                              {t1Sup != null && (
+                                <Text fontSize="10px" fontWeight="800" color="gray.400" mt={0.5}>{t1Sup}</Text>
+                              )}
+                            </HStack>
+                            <HStack w="40px" justify="center" gap={0.5}>
+                              <Text fontSize="10px" color="gray.400" fontWeight="700">
+                                {s.set_number}
+                              </Text>
+                              {isExpanded ? (
+                                <MdExpandLess size={14} color="#9ca3af" />
+                              ) : (
+                                <MdExpandMore size={14} color="#9ca3af" />
+                              )}
+                            </HStack>
+                            <HStack flex={1} gap={0.5} align="flex-start" justify="flex-end">
+                              {t2Sup != null && (
+                                <Text fontSize="10px" fontWeight="800" color="gray.400" mt={0.5}>{t2Sup}</Text>
+                              )}
+                              <Text fontSize="lg" fontWeight="900" color="gray.800">{t2}</Text>
+                            </HStack>
                           </HStack>
+                          {s.tiebreak && !setWinner && (
+                            <HStack justify="space-between">
+                              <Text flex={1} fontSize="xs" color="gray.400" fontWeight="700">
+                                TB {s.tiebreak.team1_tie_points ?? 0}
+                              </Text>
+                              <Box w="40px" />
+                              <Text flex={1} textAlign="right" fontSize="xs" color="gray.400" fontWeight="700">
+                                TB {s.tiebreak.team2_tie_points ?? 0}
+                              </Text>
+                            </HStack>
+                          )}
+                        </VStack>
+
+                        {isExpanded && (
+                          <VStack align="stretch" gap={1} bg="white" px={3} py={2} borderTop="1px solid" borderColor="gray.100">
+                            {gamesAsc.length === 0 ? (
+                              <Text fontSize="xs" color="gray.300">No games recorded.</Text>
+                            ) : (
+                              gamesAsc.map((g) => (
+                                <HStack key={g.game_number} justify="space-between">
+                                  <Text flex={1} fontSize="sm" fontWeight={g.winner_team_id === match.team1.id ? "900" : "500"} color={g.winner_team_id === match.team1.id ? "blue.600" : "gray.600"}>
+                                    {g.team1_points ?? "-"}
+                                  </Text>
+                                  <Text w="40px" textAlign="center" fontSize="10px" color="gray.300" fontWeight="700">
+                                    G{g.game_number}
+                                  </Text>
+                                  <Text flex={1} textAlign="right" fontSize="sm" fontWeight={g.winner_team_id === match.team2.id ? "900" : "500"} color={g.winner_team_id === match.team2.id ? "orange.600" : "gray.600"}>
+                                    {g.team2_points ?? "-"}
+                                  </Text>
+                                </HStack>
+                              ))
+                            )}
+                          </VStack>
                         )}
-                      </VStack>
+                      </Box>
                     );
                   })}
                 </VStack>
@@ -364,21 +439,29 @@ export default function RefereeDashboard({
   userName: string | null;
   onLogout: () => void;
 }) {
-  const [matches, setMatches] = useState<MockMatch[]>(readMatches);
+  const [matches, setMatches] = useState<Match[]>([]);
+  const [loading, setLoading] = useState(true);
   const [modalTarget, setModalTarget] = useState<MatchModalTarget | null>(null);
   const [viewingMatchId, setViewingMatchId] = useState<string | null>(null);
 
-  const refresh = () => setMatches(readMatches());
+  const refresh = () => {
+    setLoading(true);
+    fetchMatches()
+      .then(setMatches)
+      .finally(() => setLoading(false));
+  };
 
-  const cycleStatus = (matchId: string, current: MockMatchStatus) => {
+  useEffect(refresh, []);
+
+  const cycleStatus = async (matchId: string, current: MatchStatus) => {
     const next = STATUS_FLOW[(STATUS_FLOW.indexOf(current) + 1) % STATUS_FLOW.length];
-    setMatchStatus(matchId, next);
+    await apiSetMatchStatus(matchId, next);
     refresh();
   };
 
-  const handleDelete = (m: MockMatch) => {
+  const handleDelete = async (m: Match) => {
     if (!window.confirm(`Delete the match on Court ${m.court} (${m.team1.team_name} vs ${m.team2.team_name})?`)) return;
-    deleteMatch(m.id);
+    await apiDeleteMatch(m.id);
     refresh();
   };
 
@@ -480,7 +563,13 @@ export default function RefereeDashboard({
               </Box>
             </Box>
             <Box as="tbody">
-              {matches.length === 0 ? (
+              {loading ? (
+                <Box as="tr">
+                  <Box as="td" {...{ colSpan: 6 }} px={4} py={8} textAlign="center">
+                    <Spinner size="sm" color="orange.500" />
+                  </Box>
+                </Box>
+              ) : matches.length === 0 ? (
                 <Box as="tr">
                   <Box as="td" {...{ colSpan: 6 }} px={4} py={8} textAlign="center">
                     <Text fontSize="sm" color="gray.400">No matches scheduled yet.</Text>
@@ -537,7 +626,7 @@ export default function RefereeDashboard({
                           borderColor="blue.200"
                           fontWeight="700"
                           _hover={{ bg: "blue.50" }}
-                          onClick={() => setModalTarget({ mode: "edit", matchId: m.id })}
+                          onClick={() => setModalTarget({ mode: "edit", match: m })}
                         >
                           Edit
                         </Button>

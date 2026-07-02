@@ -3,13 +3,12 @@
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Box, HStack, Text, Spinner, VStack, Button } from "@chakra-ui/react";
-import SetEditor, { type SetRow } from "@/components/setEditor";
+import SetEditor from "@/components/setEditor";
 import ServerSelectModal from "@/components/ServerSelectModal";
 import { formatCategory } from "@/utils/enums";
 import { MdAdd } from "react-icons/md";
-import { getLiveMatchForCourt, mockSetsByMatch, nextMockId, type MockPlayerStat } from "@/utils/mockData";
-
-type Team = { id: string; team_name: string; logo?: string | null };
+import { addSet as apiAddSet, fetchLiveMatch } from "@/utils/api";
+import type { PlayerStat, SetRow, TeamRef } from "@/utils/types";
 
 export default function RefCourtPage() {
   const params = useParams();
@@ -18,9 +17,9 @@ export default function RefCourtPage() {
   const category = searchParams.get("category");
 
   const [matchId, setMatchId] = useState<string>("");
-  const [matchStage, setMatchStage] = useState<string>("group");
-  const [team1, setTeam1] = useState<Team | null>(null);
-  const [team2, setTeam2] = useState<Team | null>(null);
+  const [team1, setTeam1] = useState<TeamRef | null>(null);
+  const [team2, setTeam2] = useState<TeamRef | null>(null);
+  const [roster, setRoster] = useState<PlayerStat[]>([]);
   const [sets, setSets] = useState<SetRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [addingSet, setAddingSet] = useState(false);
@@ -32,26 +31,25 @@ export default function RefCourtPage() {
   useEffect(() => {
     if (!court) return;
 
-    const load = () => {
+    const load = async () => {
       setLoading(true);
-      const match = getLiveMatchForCourt(court);
+      const match = await fetchLiveMatch(court);
       if (!match) {
         setTeam1(null);
         setTeam2(null);
+        setRoster([]);
         setSets([]);
         setLoading(false);
         return;
       }
 
       setMatchId(match.id);
-      setMatchStage(match.match_stage ?? "group");
       setTeam1(match.team1);
       setTeam2(match.team2);
+      setRoster(match.roster);
 
       // Sort existing sets newest first (highest set_number at top)
-      const sorted = (mockSetsByMatch[match.id] ?? [])
-        .slice()
-        .sort((a: SetRow, b: SetRow) => b.set_number - a.set_number);
+      const sorted = match.sets.slice().sort((a, b) => b.set_number - a.set_number);
       setSets(sorted);
       setLoading(false);
     };
@@ -59,30 +57,17 @@ export default function RefCourtPage() {
     load();
   }, [court]);
 
-  // Adds a new set to local state (mock — no backend persistence)
-  const addSet = (server: MockPlayerStat) => {
+  // Creates the set on the server, then adds it to local state.
+  const addSet = async (server: PlayerStat) => {
     if (!matchId) return;
     setAddingSet(true);
-    const nextNum = sets.length + 1;
-    const newSet: SetRow = {
-      id: nextMockId("set"),
-      set_number: nextNum,
-      winner_team_id: "",
-      games: [
-        {
-          game_number: 1,
-          winner_team_id: "",
-          team1_points: null,
-          team2_points: null,
-          is_golden_point: false,
-          server_name: `${server.first_name} ${server.last_name}`,
-        },
-      ],
-      tiebreak: null,
-    };
-    setSets((prev) => [newSet, ...prev]);
-    setActiveSetIndex(0);
-    setAddingSet(false);
+    try {
+      const newSet = await apiAddSet(matchId, `${server.first_name} ${server.last_name}`.trim());
+      setSets((prev) => [newSet, ...prev]);
+      setActiveSetIndex(0);
+    } finally {
+      setAddingSet(false);
+    }
   };
 
   if (loading) return <Spinner size="xl" mx="auto" mt="20" />;
@@ -208,6 +193,7 @@ export default function RefCourtPage() {
                   set={s}
                   team1={team1}
                   team2={team2}
+                  roster={roster}
                   onChange={(updated) => {
                     setSets((prev) => prev.map((p, i) => (i === idx ? updated : p)));
                   }}
@@ -223,7 +209,7 @@ export default function RefCourtPage() {
 
       {showServerModal && (
         <ServerSelectModal
-          matchId={matchId}
+          roster={roster}
           team1={team1}
           team2={team2}
           onClose={() => setShowServerModal(false)}

@@ -8,37 +8,18 @@ import {
   Input,
 } from "@chakra-ui/react";
 import { MdAdd, MdDelete, MdClose } from "react-icons/md";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ServerSelectModal from "@/components/ServerSelectModal";
-import type { MockPlayerStat } from "@/utils/mockData";
+import { updateSet as apiUpdateSet, deleteSet as apiDeleteSet } from "@/utils/api";
+import type { GameRow, PlayerStat, SetRow, TiebreakRow } from "@/utils/types";
+
+export type { SetRow };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface TeamRef {
   id: string;
   team_name: string;
-}
-
-interface GameRow {
-  game_number: number;
-  winner_team_id: string;
-  team1_points: string | null;
-  team2_points: string | null;
-  is_golden_point: boolean;
-  server_name?: string | null;
-}
-
-interface TiebreakRow {
-  team1_tie_points: number | null;
-  team2_tie_points: number | null;
-}
-
-export interface SetRow {
-  id?: string;
-  set_number: number;
-  winner_team_id: string;
-  games: GameRow[];
-  tiebreak: TiebreakRow | null; // stored in slpl_tie_breaks, separate from games
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -148,7 +129,9 @@ function GameEditor({
                       onClick={() =>
                         onChange({
                           ...game,
-                          winner_team_id: "",
+                          // Only clear the win if it belonged to this same row —
+                          // editing the other team's points shouldn't unset it.
+                          winner_team_id: isWinner ? "" : game.winner_team_id,
                           [ptKey]: isWinner ? p : pts === p ? null : p,
                         })
                       }
@@ -212,6 +195,7 @@ export default function SetEditor({
   set,
   team1,
   team2,
+  roster,
   onChange,
   onRemove,
   matchId,
@@ -219,6 +203,7 @@ export default function SetEditor({
   set: SetRow;
   team1: TeamRef;
   team2: TeamRef;
+  roster: PlayerStat[];
   matchId: string;
   onChange: (s: SetRow) => void;
   onRemove: () => void;
@@ -226,13 +211,18 @@ export default function SetEditor({
   const t1Wins = set.games.filter((g) => g.winner_team_id === team1.id).length;
   const t2Wins = set.games.filter((g) => g.winner_team_id === team2.id).length;
   const [showServerModal, setShowServerModal] = useState(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const commit = (updatedSet: SetRow) => {
     onChange(updatedSet);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      apiUpdateSet(matchId, updatedSet.id, updatedSet).catch((e) => console.error("Auto-save failed", e));
+    }, 400);
   };
 
-  const addGame = (server: MockPlayerStat) => {
-    const newGames = [emptyGame(0, `${server.first_name} ${server.last_name}`), ...set.games]; // prepend
+  const addGame = (server: PlayerStat) => {
+    const newGames = [emptyGame(0, `${server.first_name} ${server.last_name}`.trim()), ...set.games]; // prepend
 
     const updatedGames = newGames.map((g, idx, arr) => ({
       ...g,
@@ -310,7 +300,9 @@ export default function SetEditor({
   // ── Set delete ────────────────────────────────────────────────────────────
 
   const handleDeleteSet = () => {
-    if (window.confirm(`Delete Set ${set.set_number}?`)) onRemove();
+    if (!window.confirm(`Delete Set ${set.set_number}?`)) return;
+    onRemove();
+    apiDeleteSet(matchId, set.id).catch((e) => console.error("Delete set failed", e));
   };
 
   return (
@@ -557,7 +549,7 @@ export default function SetEditor({
 
       {showServerModal && (
         <ServerSelectModal
-          matchId={matchId}
+          roster={roster}
           team1={team1}
           team2={team2}
           onClose={() => setShowServerModal(false)}

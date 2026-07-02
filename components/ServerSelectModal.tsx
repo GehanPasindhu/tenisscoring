@@ -2,7 +2,7 @@
 
 import { Box, Button, HStack, Text, VStack } from "@chakra-ui/react";
 import { MdClose } from "react-icons/md";
-import { mockRosterByMatch, type MockPlayerStat } from "@/utils/mockData";
+import type { PlayerStat } from "@/utils/types";
 
 interface TeamRef {
   id: string;
@@ -10,21 +10,20 @@ interface TeamRef {
 }
 
 export default function ServerSelectModal({
-  matchId,
+  roster,
   team1,
   team2,
   title = "Who's serving?",
   onSelect,
   onClose,
 }: {
-  matchId: string;
+  roster: PlayerStat[];
   team1: TeamRef;
   team2: TeamRef;
   title?: string;
-  onSelect: (player: MockPlayerStat) => void;
+  onSelect: (player: PlayerStat) => void;
   onClose: () => void;
 }) {
-  const roster = mockRosterByMatch[matchId] ?? [];
   const groups = [
     { team: team1, players: roster.filter((p) => p.team_id === team1.id), color: "blue.500" },
     { team: team2, players: roster.filter((p) => p.team_id === team2.id), color: "orange.500" },
